@@ -6,27 +6,31 @@ ARGUMENTS: (order doesn't matter)
 -c --> Compress input file with Homebrew and Brotli Compression algorithms
 -p --> Parses input file to a csv
 -a --> Compress input file with Homebrew and Brotli Compression algorithms and Parses input file to a csv (DEFAULT IF NO OPTIONS SELECTED)
--r __ --> Set report rate to __ (DEFAULT 100Hz)
+-r __ --> Set report rate to __ (DEFAULT 100Hz) (ONLY 1kHz AND 100Hz ALLOWED)
 Must always input a Log file path (unless -h is first argument)
 Must always input a DBC file path if parsing to csv
 
-7/23/24
+11/20/24 - Brandon Kim
+
+-Fixed case sensitivity of file extensions
+-Integrated Brotli configured for Windows machines (?)
+-Still needs testing
+
+7/24/24
 
 Optimizations:
 -
 
 New Features:
--
+-Passing in a Brotli compressed file will automatically uncompress if selected to parse it
 
 Bug Fixes:
--
+-Compress step added NULL channels to csv log
 
 Notes:
 -Should add an verbose argument so that user can choose to see time and data stats
--Parsing a Brotli compressed file not working
 -If multiple log files or DBC files are submitted, the last one will be selected for each type
 -Optimizing trailing 0's wont work for scaling values that aren't 0.1, 0.5, 0.01, 0.001 or wild number like 10.1
--Selected report rates untested for values other than 1000, 100 (values other than these aren't valid)
 -End of data may be cut off due to compressed file 
 
 7/23/24

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#define max(a,b) (((a) > (b)) ? (a) : (b))
 
 typedef struct Sensor_Signal {
     char* name;
@@ -39,7 +40,6 @@ char compressedFile[256];
 char brotliFile[256];
 
 // Function Definitions
-int max(int a, int b);
 int height(Tree_Node* node);
 int getBalance(Tree_Node* node);
 void preOrder(Tree_Node* root, uint8_t operation, FILE* fp);
@@ -53,9 +53,34 @@ int compressData(const char* fileName, int brotliFlag);
 int parseData(const char* fileName, int rate);
 int updateLog(const char* fileName);
 
-int max(int a, int b) {
-    return (a > b) ? a : b;
-}
+void printFileState(char * f, int instance)
+{
+    FILE *fp = fopen(f, "rb");
+    if (!fp) {
+        printf("Log file: %s does not exist\n", logFile);
+    } else {
+        unsigned char buffer[13];
+        int framesRead = 0;
+        int frameLimit = 10;
+        size_t bytesRead;
+        printf("File Read # %d\n", instance);
+
+        if (instance == 4)
+        {
+            // frameLimit = 1763933;
+        }
+
+        while ((bytesRead = fread(buffer, 1, sizeof(buffer), fp)) > 0 && framesRead < frameLimit) 
+        {
+            framesRead++;
+            for (size_t i = 0; i < bytesRead; i++) 
+            { 
+                printf("%02x ", buffer[i]); 
+            }
+            printf("\n");
+        }
+        fclose(fp);
+    }
 
 int height(Tree_Node* node) {
     if (node == NULL) {
@@ -239,7 +264,7 @@ Tree_Node* parseDBC(const char* fileName, Tree_Node* head) {
     uint16_t id;
     
     // Open DBC file
-    fp = fopen(fileName, "r");
+    fp = fopen(fileName, "rb");
     if (!fp) {
         free(str);
         printf("Fopen DBC File Failed: %s\n", fileName);
@@ -302,6 +327,8 @@ Tree_Node* parseDBC(const char* fileName, Tree_Node* head) {
 // Compresses the Hex data in the specified file and additionally creates a Brotli compressed file if specified
 int compressData(const char* fileName, int brotliFlag) {
 
+    // printFileState(fileName, 2);
+
     uint8_t* idPtr = (uint8_t*) calloc(3, sizeof(uint8_t));
     uint8_t* canData = (uint8_t*) calloc(9, sizeof(uint8_t));
     uint8_t* timestamp = (uint8_t*) calloc(4, sizeof(uint8_t));
@@ -311,7 +338,7 @@ int compressData(const char* fileName, int brotliFlag) {
     uint64_t tempData = 0;
     Tree_Node* curNode;
     
-    fp = fopen(fileName, "r");
+    fp = fopen(fileName, "rb");
     if (!fp) {
         // Free before return
         free(idPtr);
@@ -359,6 +386,9 @@ int compressData(const char* fileName, int brotliFlag) {
         }
     }
 
+    // printFileState(compressedFile, 3);
+
+
     // Cool stats for ya bud
     long originalLen = ftell(fp);
     long homebrewLen = ftell(newfp);
@@ -394,7 +424,7 @@ int compressData(const char* fileName, int brotliFlag) {
         }
 
         // Checking length of Brotli Compressed file
-        fp = fopen(brotliFile, "r");
+        fp = fopen(brotliFile, "rb");
         if (!fp) {
             printf("Fopen Brotli Failed\n");
             return -1;
@@ -419,11 +449,15 @@ int parseData(const char* fileName, int rate) {
     // Open hex and csv file
     FILE *hexfp, *csvfp;
 
-    hexfp = fopen(fileName, "r");
+    hexfp = fopen(fileName, "rb");
     if (!hexfp) {
         printf("Fopen Hex Failed: %s\n", fileName);
         return -1;
     }
+
+    // printf("%s\n", fileName);
+    // printFileState(fileName, 4);
+
 
     char csvName[256];
     memset(csvName, 0, 256);
@@ -462,7 +496,11 @@ int parseData(const char* fileName, int rate) {
 
     // Return to beginning of file
     fseek(hexfp, 0, SEEK_SET);
+    // printf("DEBUG: PARSE DATA START\n");
 
+    int hasTimestampError = 0;
+
+    // preOrder(parent, 0, NULL);
     while (!feof(hexfp)) {
         // Grap ID of message and check if DBC defines it
         fread(idPtr, 2, 1, hexfp);
@@ -475,8 +513,79 @@ int parseData(const char* fileName, int rate) {
             // ID is defined by DBC
             fread(canData, 8, 1, hexfp);
             fread(timestamp, 3, 1, hexfp);
+
+            int newTimestamp = ((timestamp[0] << 16) + (timestamp[1] << 8) + timestamp[2]);
+    
+
+            /* CORRRUPTED FRAME LOGIC */
+
+            long test_CANary_frame; //Stores the file pointer before cursor fuckery
+            int last_valid_timestamp; //Stores the previous timestamp in case of corruption
+
+            while ((newTimestamp - curTimestamp > 500) || (newTimestamp - last_valid_timestamp > 500))
+            {
+                if (hasTimestampError == 0)
+                {
+                    // printf("DEBUG: INCORRECT TIMESTAMP FILE LOC %d\n", ftell(hexfp));
+                    hasTimestampError = 1;
+                }
+
+                // printf("CURTIME: %d TIMESTAMP BITS 1:%x 2:%x 3:%x \n", curTimestamp, timestamp[0], timestamp[1], timestamp[2]);
+                timestamp[0] = timestamp[1];
+                timestamp[1] = timestamp[2];
+                fread(&timestamp[2], 1, 1, hexfp);
+
+                test_CANary_frame = ftell(hexfp); //Reads the cursor before reading the frame
+
+                last_valid_timestamp = curTimestamp;
+                newTimestamp = ((timestamp[0] << 16) + (timestamp[1] << 8) + timestamp[2]);
+
+                //TIMESTAMP CHECKS
+
+                //FIRST TIMESTAMP CHECK - Absolute difference
+                // if (abs(last_valid_timestamp - newTimestamp) > 500) 
+                // {
+                //     continue;
+                // }
+                if ((newTimestamp - last_valid_timestamp > 500) || (newTimestamp < last_valid_timestamp))
+                {
+                    continue;
+                }
+                
+                //SECOND TIMESTAMP CHECK - CANARY FRAMES VALIDATION
+                int validation_frames = 2; //Number of frames to validate for corruption
+
+                for (int i = 0; i < validation_frames; i++)
+                {
+                    uint8_t * t_timestamp = (uint8_t*) calloc(4, sizeof(uint8_t));
+
+                    fseek(hexfp, (2+8), SEEK_CUR); //Read the hypothetical next id and CAN data
+                    fread(t_timestamp, 3, 1, hexfp); //Next hypothetical timestamp
+                    int t_newTimestamp = ((t_timestamp[0] << 16) + (t_timestamp[1] << 8) + t_timestamp[2]);
+
+                    free(t_timestamp);
+
+                    //If able to get to validation_frames count without failed timestamp check, then bueno
+                    if ((newTimestamp - last_valid_timestamp > 500) || (newTimestamp < last_valid_timestamp))
+                    {
+                        fseek(hexfp, test_CANary_frame, SEEK_SET); //Reset to after test timestamp pulled
+                        break; //Continue into while loop and start next shifted timestamp read
+                    }
+
+                    last_valid_timestamp = t_newTimestamp;
+                }
+
+                break; //If both timestamp checks have passed, then timestamp valid. 
+            }
+
             // Check if timestamp is transitioning
-            while (curTimestamp != ((timestamp[0] << 16) + (timestamp[1] << 8) + timestamp[2])) {
+            while (curTimestamp != newTimestamp) {
+                if (curTimestamp >= newTimestamp)
+                {
+                    // printf("DATA FROM PAST!");
+                    continue;
+                }
+
                 // Check if data should be written due to report rate
                 if ((curTimestamp - initialTimestamp) % reportRate == 0) {
                     fprintf(csvfp, "%.3f", (curTimestamp - initialTimestamp) * 0.001);
@@ -484,6 +593,8 @@ int parseData(const char* fileName, int rate) {
                     fprintf(csvfp, "\n");
                 }
                 curTimestamp += 1;
+
+
             }
             tempData = (((uint64_t) canData[0]) << 56) + (((uint64_t) canData[1]) << 48) + (((uint64_t) canData[2]) << 40) + (((uint64_t) canData[3]) << 32) + (((uint64_t) canData[4]) << 24) + (((uint64_t) canData[5]) << 16) + (((uint64_t) canData[6]) << 8) + ((uint64_t) canData[7]);
             curSensor = curNode->head;
@@ -521,7 +632,7 @@ int updateLog(const char* fileName) {
     uint64_t analogMsg1 = 0;
     uint64_t analogMsg2 = 0;
     
-    fp = fopen(fileName, "r");
+    fp = fopen(fileName, "rb");
     if (!fp) {
         // Free before return
         free(idPtr);
@@ -667,7 +778,7 @@ int main(int argc, char **argv) {
                 printf("Invalid report rate entered: %s\nValid report rates are 100 and 1000\n", argv[i+1]);
                 return 0;
             }
-        } else if (strstr(argv[i], ".dbc") != NULL) {
+        } else if ((strstr(argv[i], ".dbc") != NULL) || (strstr(argv[i], ".DBC") != NULL)) {
             if (strlen(argv[i]) >= 236) {
                 printf("DBC file path too long: %s\n Please limit path size to 236 chars.\n", argv[2]);
                 return -1;
@@ -675,7 +786,7 @@ int main(int argc, char **argv) {
             // TODO this memset is ensure inputting multiple DBC files don't mess up the program
             memset(dbcFile, 0, 256);
             strcpy(dbcFile, argv[i]);
-        } else if (strstr(argv[i], ".TXT") != NULL) {
+        } else if ((strstr(argv[i], ".TXT") != NULL) || (strstr(argv[i], ".txt") != NULL)) {
             if (strlen(argv[i]) >= 236) {
                 printf("Log file path too long: %s\n Please limit path size to 236 chars.\n", argv[3]);
                 return -1;
@@ -699,11 +810,12 @@ int main(int argc, char **argv) {
     }
 
     // Check that log file exists
-    FILE *fp = fopen(logFile, "r");
+    FILE *fp = fopen(logFile, "rb");
     if (!fp) {
         printf("Log file: %s does not exist\n", logFile);
         return -1;
     } else {
+        // printFileState(logFile, 1);
         fclose(fp);
     }
 
@@ -795,7 +907,7 @@ int main(int argc, char **argv) {
     if (parseSet) {
 
         // Reset DBC tree from possible null sensors created during compression
-        preOrder(parent, 4, NULL);
+        // preOrder(parent, 4, NULL);
         parent = NULL;
 
         // Parse DBC
@@ -809,8 +921,11 @@ int main(int argc, char **argv) {
             preOrder(parent, 4, NULL);
             return -1;
         }
-
-        ret = parseData(alreadyBrotli ? logFile : compressedFile, reportRate);
+        
+        //TODO: Change to re-enable Brotli
+        // ret = parseData(alreadyBrotli ? logFile : compressedFile, reportRate);
+        ret = parseData(logFile, reportRate);
+        // ret = parseData(logFile, reportRate);
         if (ret != 0) {
             printf("Parsing data failed\n");
             // Delete intermediate files
